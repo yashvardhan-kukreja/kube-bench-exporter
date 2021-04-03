@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-creds ### DO NOT TOUCH THIS
+  namespace: kube-system ### DO NOT TOUCH THIS
+stringData:
+  AWS_ACCESS_KEY: AKxxxxxxxxxxxxxxxxxxS
+  AWS_SECRET_ACCESS_KEY: uxxxxxxxxxxxxxxxxxxxxxxkn
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: target-config
+  namespace: kube-system
+data:
+  target-config.json: |
+    [
+      {
+        "type": "s3",
+        "config": {
+          "bucket": "bucket1234",
+          "region": "us-east-1",
+          "prefix": "sample-folder/sub-folder"
+        }
+      },
+      {
+        "type": "s3",
+        "config": {
+          "bucket": "bucket5678",
+          "region": "us-east-1"
+        }
+      }
+    ]
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: kube-bench-exporter
+  namespace: kube-system
+spec:
+  schedule: "0 0 1 * *"  ## run every month
+  jobTemplate:
+    spec:  
+      template:
+        spec:
+          hostPID: true
+          initContainers:
+            - name: kube-bench
+              image: aquasec/kube-bench:latest
+              command: ["/bin/sh"]
+              args: ["-c", "kube-bench -v 3 --logtostderr --benchmark eks-1.0 > /export/kube-bench/report.txt"]
+              volumeMounts:
+                - name: var-lib-kubelet
+                  mountPath: /var/lib/kubelet
+                  readOnly: true
+                - name: etc-systemd
+                  mountPath: /etc/systemd
+                  readOnly: true
+                - name: etc-kubernetes
+                  mountPath: /etc/kubernetes
+                  readOnly: true
+                - name: published-report
+                  mountPath: /export/kube-bench/
+          containers:
+            - name: kube-bench-exporter-sidecar
+              image:  yashvardhankukreja/kube-bench-exporter:v0.0.1
+              envFrom: 
+                - secretRef:
+                    name: aws-creds
+              volumeMounts:
+                - name: published-report
+                  mountPath: /export/kube-bench/
+                  readOnly: true
+                - name: target-config
+                  mountPath: /etc/config/
+          restartPolicy: Never
+          volumes:
+            - name: var-lib-kubelet
+              hostPath:
+                path: "/var/lib/kubelet"
+            - name: etc-systemd
+              hostPath:
+                path: "/etc/systemd"
+            - name: etc-kubernetes
+              hostPath:
+                path: "/etc/kubernetes"
+            - name: target-config
+              configMap:
+                name: target-config
+            - name: published-report
+              emptyDir: {}
+---
